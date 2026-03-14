@@ -159,6 +159,19 @@ app.post('/api/auth/login', async (req, res) => {
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+app.post('/api/auth/reset-password', async (req, res) => {
+    if (!dbCheck(res)) return;
+    try {
+        const { email, newPassword } = req.body;
+        if (!email || !newPassword) return res.status(400).json({ error: 'Email and new password required' });
+        const user = await User.findOne({ email });
+        if (!user) return res.status(404).json({ error: 'No account found with this email' });
+        user.password = newPassword;
+        await user.save();
+        res.json({ success: true, message: 'Password reset successfully' });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── LISTINGS ──────────────────────────────────────────────
 app.get('/api/listings', async (_req, res) => {
     if (!dbCheck(res)) return;
