@@ -28,6 +28,16 @@ if (MONGO_URI) {
 //  MONGOOSE MODELS
 // ═══════════════════════════════════════════════════════════
 
+// User
+const UserSchema = new mongoose.Schema({
+    name: { type: String, required: true },
+    phone: { type: String, required: true },
+    email: { type: String, required: true, unique: true },
+    password: { type: String, required: true },
+    createdAt: { type: Date, default: Date.now },
+});
+const User = mongoose.model('User', UserSchema);
+
 // Crop Listing (farmer puts crops for sale)
 const ListingSchema = new mongoose.Schema({
     cropName: { type: String, required: true },
@@ -127,6 +137,26 @@ async function groqPost(body) {
 // Health
 app.get('/api/health', (_req, res) => {
     res.json({ status: 'ok', service: 'BELAI Backend', db: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected', time: new Date().toISOString() });
+});
+
+// ── AUTH ──────────────────────────────────────────────────
+app.post('/api/auth/register', async (req, res) => {
+    if (!dbCheck(res)) return;
+    try {
+        const existing = await User.findOne({ email: req.body.email });
+        if (existing) return res.status(400).json({ error: 'User already exists' });
+        const user = await User.create(req.body);
+        res.status(201).json({ success: true, user: { id: user._id, name: user.name, email: user.email, phone: user.phone } });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+    if (!dbCheck(res)) return;
+    try {
+        const user = await User.findOne({ email: req.body.email });
+        if (!user || user.password !== req.body.password) return res.status(401).json({ error: 'Invalid credentials' });
+        res.json({ success: true, user: { id: user._id, name: user.name, email: user.email, phone: user.phone } });
+    } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ── LISTINGS ──────────────────────────────────────────────
@@ -290,17 +320,29 @@ app.post('/api/crop-planner', async (req, res) => {
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ── DISEASE DETECTION ─────────────────────────────────────
+// ── DISEASE DETECTION (ML SERVICE) ─────────────────────────
 app.post('/api/disease', async (req, res) => {
     try {
         const { imageBase64 } = req.body;
         if (!imageBase64) return res.status(400).json({ error: 'imageBase64 required' });
-        const data = await groqPost({ model: 'meta-llama/llama-4-scout-17b-16e-instruct', max_tokens: 700, messages: [{ role: 'user', content: [{ type: 'text', text: 'Analyze plant disease. Return ONLY JSON: {"disease_name":"...","scientific_name":"...","confidence_percent":85,"severity":"Moderate","affected_area_percent":30,"cause":"...","symptoms_observed":"...","treatment_steps":["...","...","..."],"pesticides":[{"name":"...","dosage":"...","frequency":"..."}],"organic_alternatives":"...","prevention_tips":"..."}' }, { type: 'image_url', image_url: { url: imageBase64 } }] }] });
-        const txt = data.choices?.[0]?.message?.content || '';
-        const m = txt.match(/\{[\s\S]*\}/);
-        if (m) res.json(JSON.parse(m[0]));
-        else res.status(422).json({ error: 'Parse failed', raw: txt });
-    } catch (e) { res.status(500).json({ error: e.message }); }
+
+        // Forward the image to our dedicated Python AI Model (MobileNetV2 CNN)
+        const mlResponse = await fetch('http://localhost:8000/predict', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ imageBase64 })
+        });
+
+        if (!mlResponse.ok) {
+            const errText = await mlResponse.text();
+            throw new Error(`ML Service Error: ${errText}`);
+        }
+
+        const result = await mlResponse.json();
+        res.json(result);
+    } catch (e) {
+        res.status(500).json({ error: e.message, info: 'Make sure the Python ML service is running on port 8000.' });
+    }
 });
 
 // ── FOOD LABEL ────────────────────────────────────────────
